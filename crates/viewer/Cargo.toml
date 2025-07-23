@@ -1,0 +1,19 @@
+[package]
+name = "viewer"
+edition = "2024"
+version.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+kv-sys = { path = "../kv-sys" }
+
+walkers.workspace = true
+eframe.workspace = true
+egui.workspace = true
+sqlx.workspace = true
+tokio.workspace = true
+egui_extras.workspace = true
+puffin.workspace = true
+profiling = { workspace = true }
+wgpu.workspace = true
+
