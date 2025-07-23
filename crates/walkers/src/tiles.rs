@@ -136,6 +136,7 @@ pub struct TextureWithUv {
     pub uv: Rect,
 }
 
+#[profiling::function]
 pub(crate) fn draw_tiles(
     painter: &egui::Painter,
     map_center: Position,

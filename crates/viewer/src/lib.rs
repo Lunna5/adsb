@@ -2,9 +2,9 @@ use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 use walkers::extras::{
     GroupedPlaces, LabeledSymbol, LabeledSymbolGroup, LabeledSymbolGroupStyle, LabeledSymbolStyle,
-    Places, Symbol,
+    Symbol,
 };
-use walkers::{MapMemory, Plugin, lat_lon};
+use walkers::{Plugin, lat_lon};
 
 pub mod components;
 pub mod frames;
@@ -23,7 +23,17 @@ pub struct Airport {
     pub lon: f64,
 }
 
-pub fn airport_plugin(airports_lock: Arc<RwLock<Vec<Airport>>>) -> Vec<GroupedPlaces<LabeledSymbol, LabeledSymbolGroup>> {
+lazy_static::lazy_static! {
+    pub static ref AIRPORTS_PLUGIN: Arc<RwLock<Vec<GroupedPlaces<LabeledSymbol, LabeledSymbolGroup>>>> = Arc::new(RwLock::new(Vec::new()));
+}
+
+pub fn airport_plugin(
+    airports_lock: Arc<RwLock<Vec<Airport>>>,
+) -> Arc<RwLock<Vec<GroupedPlaces<LabeledSymbol, LabeledSymbolGroup>>>> {
+    if !AIRPORTS_PLUGIN.read().unwrap().is_empty() {
+        return Arc::clone(&AIRPORTS_PLUGIN);
+    }
+
     let mut airports_group: Vec<GroupedPlaces<LabeledSymbol, LabeledSymbolGroup>> = Vec::new();
 
     let airports = airports_lock.read().unwrap();
@@ -55,50 +65,17 @@ pub fn airport_plugin(airports_lock: Arc<RwLock<Vec<Airport>>>) -> Vec<GroupedPl
             symbols,
             LabeledSymbolGroup {
                 style: LabeledSymbolGroupStyle::default(),
-            },
+            }
         ));
     }
 
-    // airports_group.push(GroupedPlaces::new(
-    //     places_by_country.get("\"Spain\"").unwrap().clone(),
-    //     LabeledSymbolGroup {
-    //         style: LabeledSymbolGroupStyle::default(),
-    //     },
-    // ));
-
-    airports_group
-}
-
-pub fn airport_plugin_2(airports_lock: Arc<RwLock<Vec<Airport>>>) -> impl Plugin{
-    let mut airports_group: Vec<GroupedPlaces<LabeledSymbol, LabeledSymbolGroup>> = Vec::new();
-
-    let airports = airports_lock.read().unwrap();
-
-    profiling::scope!("airport_plugin");
-    let mut places: Vec<LabeledSymbol> = Vec::new();
-
-    for airport in &*airports {
-
-        let symbol = LabeledSymbol {
-            position: walkers::lat_lon(airport.lat.clone(), airport.lon.clone()),
-            label: airport.name.clone(),
-            symbol: Some(Symbol::Circle("✈️".to_string())),
-            style: LabeledSymbolStyle {
-                symbol_size: 25.,
-                ..Default::default()
-            },
-        };
-
-        places.push(symbol);
+    {
+        let mut write_guard = AIRPORTS_PLUGIN.write().unwrap();
+        *write_guard = airports_group;
     }
 
-    GroupedPlaces::new(places,
-        LabeledSymbolGroup {
-            style: LabeledSymbolGroupStyle::default(),
-        }
-    )
+    AIRPORTS_PLUGIN.clone()
 }
-
 
 pub struct AppState {
     pub store: ArcRwLock<kv_sys::KVStore>,

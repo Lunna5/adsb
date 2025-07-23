@@ -16,4 +16,6 @@ egui_extras.workspace = true
 puffin.workspace = true
 profiling = { workspace = true }
 wgpu.workspace = true
+lazy_static.workspace = true
+rayon.workspace = true
 

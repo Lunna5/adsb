@@ -184,6 +184,7 @@ impl Default for LabeledSymbolStyle {
     }
 }
 
+#[derive(Clone)]
 pub struct LabeledSymbolGroup {
     pub style: LabeledSymbolGroupStyle,
 }

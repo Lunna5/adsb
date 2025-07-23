@@ -1,13 +1,16 @@
-use egui::{DragPanButtons, PointerButton, Response, Sense, Ui, UiBuilder, Vec2, Widget};
-
 use crate::{
     center::Center, position::AdjustedPosition, tiles::draw_tiles, MapMemory, Position, Projector,
     Tiles,
 };
+use egui::{DragPanButtons, PointerButton, Response, Sense, Ui, UiBuilder, Vec2, Widget};
+use rayon::iter::ParallelIterator;
+use rayon::prelude::IntoParallelIterator;
+use rayon::ThreadPool;
+use std::sync::{Arc, Mutex};
 
 /// Plugins allow drawing custom shapes on the map. After implementing this trait for your type,
 /// you can add it to the map with [`Map::with_plugin`]
-pub trait Plugin {
+pub trait Plugin: Send + Sync {
     /// Function called at each frame.
     ///
     /// The provided [`Ui`] has its [`Ui::max_rect`] set to the full rect that was allocated
@@ -18,12 +21,23 @@ pub trait Plugin {
     /// The provided [`Response`] is the response of the map widget itself and can be used to test
     /// if the mouse is hovering or clicking on the map.
     fn run(
-        self: Box<Self>,
+        &mut self,
         ui: &mut Ui,
         response: &Response,
         projector: &Projector,
         map_memory: &MapMemory,
     );
+
+    fn is_parallel(&self) -> bool {
+        // Default implementation returns false, as not all plugins are parallel.
+        // This is useful for plugins that are not parallel.
+        false
+    }
+
+    fn parallel_run(&mut self, projector: &Projector, map_memory: &MapMemory) {
+        // Default implementation does nothing, as not all plugins are parallel.
+        // This is useful for plugins that can be run in parallel.
+    }
 }
 
 struct Layer<'a> {
@@ -63,13 +77,16 @@ impl Default for Options {
 /// # Examples
 ///
 /// ```
-/// # use walkers::{Map, Tiles, MapMemory, Position, lon_lat};
+/// use rayon::ThreadPool;
+/// use rayon::ThreadPoolBuilder;
+/// use walkers::{Map, Tiles, MapMemory, Position, lon_lat};
 ///
-/// fn update(ui: &mut egui::Ui, tiles: &mut dyn Tiles, map_memory: &mut MapMemory) {
+/// fn update(ui: &mut egui::Ui, tiles: &mut dyn Tiles, map_memory: &mut MapMemory, thread_pool: &mut ThreadPool) {
 ///     ui.add(Map::new(
 ///         Some(tiles), // `None`, if you don't want to show any tiles.
 ///         map_memory,
-///         lon_lat(17.03664, 51.09916)
+///         lon_lat(17.03664, 51.09916),
+///         thread_pool
 ///     ));
 /// }
 /// ```
@@ -82,8 +99,9 @@ pub struct Map<'a, 'b, 'c> {
     layers: Vec<Layer<'b>>,
     memory: &'a mut MapMemory,
     my_position: Position,
-    plugins: Vec<Box<dyn Plugin + 'c>>,
+    plugins: Vec<Arc<Mutex<Box<dyn Plugin + Send + Sync>>>>,
     options: Options,
+    pool: &'c mut ThreadPool,
 }
 
 impl<'a, 'b, 'c> Map<'a, 'b, 'c> {
@@ -91,6 +109,7 @@ impl<'a, 'b, 'c> Map<'a, 'b, 'c> {
         tiles: Option<&'b mut dyn Tiles>,
         memory: &'a mut MapMemory,
         my_position: Position,
+        pool: &'c mut ThreadPool,
     ) -> Self {
         Self {
             tiles,
@@ -98,13 +117,15 @@ impl<'a, 'b, 'c> Map<'a, 'b, 'c> {
             memory,
             my_position,
             plugins: Vec::default(),
+            //parallel_plugins: Vec::default(),
             options: Options::default(),
+            pool,
         }
     }
 
     /// Add plugin to the drawing pipeline. Plugins allow drawing custom shapes on the map.
-    pub fn with_plugin(mut self, plugin: impl Plugin + 'c) -> Self {
-        self.plugins.push(Box::new(plugin));
+    pub fn with_plugin(mut self, plugin: impl Plugin + 'static + std::marker::Send) -> Self {
+        self.plugins.push(Arc::new(Mutex::new(Box::new(plugin))));
         self
     }
 
@@ -289,6 +310,7 @@ impl Map<'_, '_, '_> {
 
 impl Widget for Map<'_, '_, '_> {
     fn ui(mut self, ui: &mut Ui) -> Response {
+        profiling::scope!("Map::ui");
         let (rect, mut response) =
             ui.allocate_exact_size(ui.available_size(), Sense::click_and_drag());
 
@@ -320,10 +342,37 @@ impl Widget for Map<'_, '_, '_> {
 
         // Run plugins.
         let projector = Projector::new(response.rect, self.memory, self.my_position);
+
+        // self.plugins
+        //     .iter()
+        //     .filter(|plugin| plugin.lock().unwrap().is_parallel())
+        //     .cloned()
+        //     .collect::<Vec<_>>()
+        //     .into_par_iter()
+        //     .for_each(|plugin| {
+        //         profiling::register_thread!();
+        //         let mut plugin = plugin.lock().unwrap();
+        //         plugin.parallel_run(&projector, self.memory);
+        //     });
+
+        self.pool.scope(|s| {
+            profiling::scope!("Map::parallel_plugins");
+            for plugin in &self.plugins {
+                if plugin.lock().unwrap().is_parallel() {
+                    s.spawn(|_| {
+                        profiling::register_thread!();
+                        let mut p = plugin.lock().unwrap();
+                        p.parallel_run(&projector, self.memory);
+                    });
+                }
+            }
+        });
+
         for (idx, plugin) in self.plugins.into_iter().enumerate() {
             profiling::scope!("Map::plugin");
             let mut child_ui = ui.new_child(UiBuilder::new().max_rect(rect).id_salt(idx));
-            plugin.run(&mut child_ui, &response, &projector, self.memory);
+            let mut p = plugin.lock().unwrap();
+            p.run(&mut child_ui, &response, &projector, self.memory);
         }
 
         response

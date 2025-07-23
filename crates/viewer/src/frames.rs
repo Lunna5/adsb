@@ -2,7 +2,12 @@ use crate::viewer::{Viewer, ViewerMapInfo};
 use egui::{Align2, ComboBox, Image, MenuBar, RichText, Ui, Window};
 use walkers::{MapMemory, sources::Attribution};
 
-pub fn controls(ui: &mut Ui, app: &mut ViewerMapInfo, http_stats: Vec<walkers::HttpStats>) {
+pub fn controls(
+    ui: &mut Ui,
+    app: &mut ViewerMapInfo,
+    http_stats: Vec<walkers::HttpStats>,
+    fps: f32,
+) {
     ui.collapsing("Map", |ui| {
         ComboBox::from_label("Tile Provider")
             .selected_text(format!("{:?}", app.selected_provider))
@@ -22,6 +27,10 @@ pub fn controls(ui: &mut Ui, app: &mut ViewerMapInfo, http_stats: Vec<walkers::H
                 app.selected_provider, http_stats.in_progress
             ));
         }
+    });
+
+    ui.collapsing("Framerate statistics", |ui| {
+        ui.label(format!("FPS: {}", fps));
     });
 }
 
@@ -65,7 +74,7 @@ pub fn can_go_to_my_position(map_memory: &MapMemory) -> bool {
     map_memory.detached().is_some()
 }
 
-pub fn menu_bar(ui: &mut Ui, app: &mut Viewer ) {
+pub fn menu_bar(ui: &mut Ui, app: &mut Viewer) {
     MenuBar::new().ui(ui, |ui| {
         ui.menu_button("File", |ui| {
             if ui.button("Quit").clicked() {
@@ -78,7 +87,8 @@ pub fn menu_bar(ui: &mut Ui, app: &mut Viewer ) {
                 let app_state_write = app.app_state.write().unwrap();
                 let mut store_write = app_state_write.store.write().unwrap();
 
-                let map_controls_open = store_write.get_as_bool_or_default("viewer.windows.map_controls_open", false);
+                let map_controls_open =
+                    store_write.get_as_bool_or_default("viewer.windows.map_controls_open", false);
                 store_write.set("viewer.windows.map_controls_open", !map_controls_open);
             }
         });

@@ -1,14 +1,15 @@
+use crate::components::Component;
+use crate::tiles::{Provider, TilesKind};
+use crate::{AppState, airport_plugin};
+use egui::{CentralPanel, DragPanButtons, Frame, Id, TopBottomPanel, Window};
+use rayon::ThreadPool;
 use std::collections::BTreeMap;
 use std::sync::{Arc, RwLock};
-use egui::{Align2, Area, CentralPanel, DragPanButtons, Frame, Id, SidePanel, TopBottomPanel, Window};
+use std::time::Instant;
 use walkers::{Map, MapMemory, lat_lon};
-use crate::{airport_plugin, airport_plugin_2, AppState, ArcRwLock};
-use crate::components::Component;
-use crate::components::map::map_overlay::MapOverlay;
-use crate::tiles::{Provider, TilesKind};
 
 pub struct ViewerMapInfo {
-    pub providers: BTreeMap<Provider, Vec<TilesKind>>,
+    pub(crate) providers: BTreeMap<Provider, Vec<TilesKind>>,
     pub selected_provider: Provider,
     pub map_memory: Arc<RwLock<MapMemory>>,
     pub zoom_with_ctrl_wheel: bool,
@@ -34,13 +35,37 @@ pub struct Viewer {
     pub map_info: ViewerMapInfo,
     pub app_state: Arc<RwLock<AppState>>,
     pub components: Vec<Box<dyn Component>>,
+    pub thread_pool: ThreadPool,
+    pub last_frame_time: std::time::Instant,
+    pub last_fps: f32,
 }
 
 impl Viewer {
-    pub fn new(egui_ctx: egui::Context, app_state: Arc<RwLock<AppState>>, components: Vec<Box<dyn Component>>) -> Self {
+    pub fn new(
+        egui_ctx: egui::Context,
+        app_state: Arc<RwLock<AppState>>,
+        components: Vec<Box<dyn Component>>,
+    ) -> Self {
         let map_info = ViewerMapInfo::new(egui_ctx);
 
-        Self { map_info, app_state, components }
+        Self {
+            map_info,
+            app_state,
+            components,
+            thread_pool: rayon::ThreadPoolBuilder::new()
+                .num_threads(8) // You can adjust the number of threads as needed
+                .build()
+                .expect("Failed to create thread pool"),
+            last_frame_time: Instant::now(),
+            last_fps: 0.0,
+        }
+    }
+
+    pub fn update_fps(&mut self) {
+        let now = Instant::now();
+        let dt = now - self.last_frame_time;
+        self.last_fps = 1.0 / dt.as_secs_f32();
+        self.last_frame_time = now;
     }
 
     pub fn add_component<C: Component + 'static>(&mut self, component: C) {
@@ -52,16 +77,18 @@ impl Viewer {
 impl eframe::App for Viewer {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         profiling::scope!("Viewer::update");
+        self.update_fps();
 
         TopBottomPanel::top(Id::new("my_top_panel")).show(ctx, |ui| {
             crate::frames::menu_bar(ui, self);
         });
 
         {
-            let mut app_state_write = self.app_state.write().unwrap();
+            let app_state_write = self.app_state.write().unwrap();
             let mut store_write = app_state_write.store.write().unwrap();
 
-            let mut map_controls_open = store_write.get_as_bool_or_default("viewer.windows.map_controls_open", false);
+            let mut map_controls_open =
+                store_write.get_as_bool_or_default("viewer.windows.map_controls_open", false);
 
             Window::new("Map Controls")
                 .resizable(true)
@@ -86,7 +113,7 @@ impl eframe::App for Viewer {
                         })
                         .collect();
 
-                    crate::frames::controls(ui, &mut self.map_info, http_stats);
+                    crate::frames::controls(ui, &mut self.map_info, http_stats, self.last_fps);
                 });
 
             store_write.set("viewer.windows.map_controls_open", map_controls_open);
@@ -109,7 +136,7 @@ impl eframe::App for Viewer {
 
             {
                 let mut write_guard = self.map_info.map_memory.write().unwrap();
-                let mut map = Map::new(None, &mut write_guard, gps_position);
+                let mut map = Map::new(None, &mut write_guard, gps_position, &mut self.thread_pool);
 
                 let airports = &self.app_state.read().unwrap().airports;
 
@@ -117,9 +144,14 @@ impl eframe::App for Viewer {
                     .zoom_with_ctrl(self.map_info.zoom_with_ctrl_wheel)
                     .drag_pan_buttons(DragPanButtons::PRIMARY | DragPanButtons::SECONDARY);
 
+                {
+                    let airport_plugin =
+                        airport_plugin(Arc::clone(&self.app_state.read().unwrap().airports));
+                    let write_guard = airport_plugin.write().unwrap();
 
-                for group in airport_plugin(Arc::clone(airports)) {
-                    map = map.with_plugin(group);
+                    for group in write_guard.iter().cloned() {
+                        map = map.with_plugin(group);
+                    }
                 }
 
                 for (n, tiles) in tiles.iter_mut().enumerate() {

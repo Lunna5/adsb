@@ -24,3 +24,6 @@ tempfile = "3.10"
 tokio = { version = "1", features = ["full"] }
 sqlx = { version = "0.8.6", features = ["runtime-tokio-rustls", "macros", "sqlite"] }
 profiling = { version = "1.0.17", features = ["profile-with-puffin"] }
+lazy_static = "1.5.0"
+moka = { version = "0.12.10", features = ["sync"] }
+rayon = "1.10.0"

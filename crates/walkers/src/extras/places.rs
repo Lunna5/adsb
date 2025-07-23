@@ -1,18 +1,20 @@
 use crate::{MapMemory, Plugin, Position, Projector};
 use egui::{vec2, Id, Rect, Response, Sense, Ui};
+use log::info;
+//use crate::map::ParallelPlugin;
 
 /// [`Plugin`] which shows places on the map. Place can be any type that implements the [`Place`]
 /// trait.
 pub struct Places<T>
 where
-    T: Place,
+    T: Place + Send + Sync + 'static,
 {
     places: Vec<T>,
 }
 
 impl<T> Places<T>
 where
-    T: Place,
+    T: Place + Send + Sync + 'static,
 {
     pub fn new(places: Vec<T>) -> Self {
         Self { places }
@@ -21,10 +23,10 @@ where
 
 impl<T> Plugin for Places<T>
 where
-    T: Place + 'static,
+    T: Place + Send + Sync + 'static,
 {
     fn run(
-        self: Box<Self>,
+        &mut self,
         ui: &mut Ui,
         _response: &Response,
         projector: &Projector,
@@ -48,22 +50,24 @@ pub trait Group {
 
 /// Similar to [`Places`], but groups places that are close together and draws them as a
 /// single [`Group`].
+#[derive(Clone, Debug)]
 pub struct GroupedPlaces<T, G>
 where
-    T: Place,
-    G: Group,
+    T: Place + Send + Sync + 'static,
+    G: Group + Send + Sync + 'static,
 {
-    places: Vec<T>,
+    places:  Vec<T>,
     group: G,
+    current_groups_indexes: Vec<Vec<usize>>,
 }
 
 impl<T, G> GroupedPlaces<T, G>
 where
-    T: Place,
-    G: Group,
+    T: Place + Send + Sync + 'static,
+    G: Group + Send + Sync + 'static,
 {
     pub fn new(places: Vec<T>, group: G) -> Self {
-        Self { places, group }
+        Self { places, group, current_groups_indexes: Vec::new() }
     }
 
     /// Handle user interactions. Returns whether group should be expanded.
@@ -89,81 +93,102 @@ where
 
 impl<T, G> Plugin for GroupedPlaces<T, G>
 where
-    T: Place,
-    G: Group,
+    T: Place + Send + Sync + 'static,
+    G: Group + Send + Sync + 'static,
 {
     fn run(
-        self: Box<Self>,
+        &mut self,
         ui: &mut Ui,
         _response: &Response,
         projector: &Projector,
         _map_memory: &MapMemory,
     ) {
-        for (idx, places) in groups(&self.places, projector).iter().enumerate() {
+        for (idx, group) in self.current_groups_indexes.iter().enumerate() {
             let id = ui.id().with(idx);
-            let position = center(&places.iter().map(|p| p.position()).collect::<Vec<_>>());
+            let positions: Vec<_> = group.iter().map(|&i| self.places[i].position()).collect();
+            let position = center(&positions);
             let expand = self.interact(position, projector, ui, id);
 
-            if places.len() >= 2 && !expand {
-                self.group.draw(places, position, projector, ui);
+            if group.len() >= 2 && !expand {
+                let refs: Vec<&T> = group.iter().map(|&i| &self.places[i]).collect();
+                self.group.draw(&refs, position, projector, ui);
             } else {
-                for place in places {
-                    place.draw(ui, projector);
+                for &i in group {
+                    self.places[i].draw(ui, projector);
                 }
             }
         }
     }
-}
 
-/// Group places that are close together.
-/// TODO: Delegate this function to the GPU
-fn groups<'a, T>(places: &'a [T], projector: &Projector) -> Vec<Vec<&'a T>>
-where
-    T: Place,
-{
-    let mut groups: Vec<Vec<&T>> = Vec::new();
-    let zoom: f64 = projector.memory.zoom.into();
-
-    if places.len() == 1 {
-        return if zoom < 6.0 {
-            vec![]
-        } else {
-            vec![vec![&places[0]]]
-        }
+    fn is_parallel(&self) -> bool {
+        true
     }
 
-    for place in places {
-        let place_position = place.position();
+    fn parallel_run(&mut self, projector: &Projector, map_memory: &MapMemory) {
+        profiling::scope!("GroupedPlaces::parallel_run");
+        let groups = self.groups(projector);
+        self.current_groups_indexes = groups;
+    }
+}
 
-        if !projector.is_in_view(place_position) {
-            continue; // Skip places that are not in view
+// impl<T, G> ParallelPlugin for GroupedPlaces<T, G>
+// where
+//     T: Place + Send + Sync + 'static,
+//     G: Group + Send + Sync + 'static,
+// {
+
+// }
+
+
+
+impl <T, G> GroupedPlaces<T, G>
+where
+    T: Place + Send + Sync + 'static,
+    G: Group + Send + Sync + 'static,
+{
+    /// Group places that are close together.
+    /// TODO: Delegate this function to the GPU
+    pub fn groups(&self, projector: &Projector) -> Vec<Vec<usize>> {
+        let mut groups: Vec<Vec<usize>> = Vec::new();
+        let zoom: f64 = projector.memory.zoom.into();
+
+        if self.places.len() == 1 {
+            return if zoom < 6.0 {
+                vec![]
+            } else {
+                vec![vec![0]]
+            }
         }
 
+        for (idx, place) in self.places.iter().enumerate() {
+            let place_position = place.position();
 
-        if zoom < 6.0 {
-            if (groups.len() == 0) {
-                groups.push(vec![place]);
+            if !projector.is_in_view(place_position) {
                 continue;
             }
 
-            if let Some(group) = groups.first_mut() {
-                group.push(place);
+            if zoom < 6.0 {
+                if groups.is_empty() {
+                    groups.push(vec![idx]);
+                } else {
+                    groups[0].push(idx);
+                }
+                continue;
             }
 
-            continue;
+            if let Some(group) = groups.iter_mut().find(|g| {
+                g.iter().all(|&i| {
+                    distance_projected(place_position, self.places[i].position(), projector) < 50.0
+                })
+            }) {
+                group.push(idx);
+            } else {
+                groups.push(vec![idx]);
+            }
         }
 
-        if let Some(group) = groups.iter_mut().find(|g| {
-            g.iter()
-                .all(|p| distance_projected(place.position(), p.position(), projector) < 50.0)
-        }) {
-            group.push(place);
-        } else {
-            groups.push(vec![place]);
-        }
+        groups
     }
-
-    groups
 }
 
 /// Calculate the distance between two positions after being projected onto the screen.
