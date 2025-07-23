@@ -11,7 +11,8 @@ rust-version = "1.85.0"
 # walkers = { git = "https://github.com/Lunna5/walkers.git", branch = "main" }
 walkers = { path = "crates/walkers"}
 egui = "0.32"
-eframe = "0.32"
+egui-wgpu = "0.32.0"
+eframe = { version = "0.32", features = ["wgpu"] }
 egui_extras = { version = "0.32", features = ["svg"] }
 wgpu = { version = "25", default-features = true }
 env_logger = "0.11"

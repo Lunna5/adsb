@@ -1,7 +1,5 @@
 use crate::{MapMemory, Plugin, Position, Projector};
 use egui::{vec2, Id, Rect, Response, Sense, Ui};
-use log::info;
-//use crate::map::ParallelPlugin;
 
 /// [`Plugin`] which shows places on the map. Place can be any type that implements the [`Place`]
 /// trait.
@@ -130,16 +128,6 @@ where
         self.current_groups_indexes = groups;
     }
 }
-
-// impl<T, G> ParallelPlugin for GroupedPlaces<T, G>
-// where
-//     T: Place + Send + Sync + 'static,
-//     G: Group + Send + Sync + 'static,
-// {
-
-// }
-
-
 
 impl <T, G> GroupedPlaces<T, G>
 where
