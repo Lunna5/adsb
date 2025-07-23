@@ -1,0 +1,12 @@
+[package]
+name = "kv-sys"
+edition = "2024"
+version.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+toml.workspace = true
+serde.workspace = true
+
+[dev-dependencies]
+tempfile = "3.10"
