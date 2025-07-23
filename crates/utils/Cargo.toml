@@ -1,0 +1,10 @@
+[package]
+name = "utils"
+edition = "2024"
+version.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+
+[target.'cfg(target_os = "unix")'.dependencies]
+nix = "0.30.1"
